@@ -1,8 +1,9 @@
 import os
 import jwt
+import hashlib
 from dotenv import load_dotenv
 from flask import Blueprint, request, jsonify
-from util import sanitize_request_content, device_already_exists
+from util import sanitize_request_content, device_already_exists, auth_protected
 from model import db, Token
 from datetime import datetime, timezone, timedelta
 
@@ -10,9 +11,28 @@ load_dotenv()
 
 auth_api = Blueprint('auth_api', __name__)
 
+@auth_api.route('/get-auth-info', methods=['GET'])
+@auth_protected
+def fetch_device_info(raw_token=None):
+    try:
+        token_payload = jwt.decode(raw_token, os.environ.get('SECRET_KEY'), algorithms=['HS256'])
+
+        token_entry = Token.query.filter_by(device_name=token_payload['device_name']).first()
+        return jsonify({'info': token_entry.__repr__()}), 200
+    except jwt.InvalidTokenError or jwt.ExpiredSignatureError:
+        return jsonify({'message': 'Unauthorized!'}), 401
+    
+@auth_api.route('/generate-hash', methods=['GET'])
+def generate_hash():
+    sha = hashlib.sha256()
+    curr_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    sha.update(curr_time.encode())
+    return sha.hexdigest()
+
+
 @auth_api.route('/register-device', methods=['POST'])
 @device_already_exists
-def generate_auth_token():
+def register_device():
     try:
         device_name = sanitize_request_content(request.json['device_name'])
         secret_hash = sanitize_request_content(request.json['secret_hash'])
@@ -32,8 +52,13 @@ def authenticate():
         secret_hash = sanitize_request_content(request.json['secret_hash'])
     except Exception as e:
         return jsonify({'error': str(e)}), 400
+    
+    print(device_name, secret_hash)
 
-    token_entry = Token.query.filter_by(device_name=device_name, token=secret_hash).first()
+    tokens = Token.query.all()
+    token_entry = Token.query.filter_by(token=secret_hash, device_name=device_name).first()
+
+    print(tokens)
 
     if token_entry:
         token_payload = {
